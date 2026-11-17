@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { Card, Drawer, EmptyState, Input, LoadingBlock, PageHeader, Select, cx } from "../components/ui";
 import type { QueryRow } from "./types";
 import { DueBadge, RatingBadge, StatusBadge, fmtDate, useCanTest, useMeta } from "./shared";
+import { useCan } from "../admin/auth";
 import { RetestForm, RetestHistory } from "./QueryParts";
 
 const TABS = [
@@ -15,6 +16,7 @@ const TABS = [
 ] as const;
 
 export default function Queries() {
+  const ownOnly = !useCan()("audit.manage");
   const [params, setParams] = useSearchParams();
   const status = params.get("status") ?? "open";
   const openId = Number(params.get("open")) || null;
@@ -39,7 +41,7 @@ export default function Queries() {
 
   return (
     <>
-      <PageHeader title="Queries" description="Controls that failed testing, with management responses, closure dates and retests." />
+      <PageHeader title="Queries" description={`Controls that failed testing, with management responses, closure dates and retests${ownOnly ? " — only on processes assigned to you" : ""}.`} />
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-line">
         <div className="flex gap-1">
