@@ -15,7 +15,8 @@ class QueryController extends Controller
     public function index(Request $request): JsonResponse
     {
         $status = $request->query('status', 'open');
-        $query = self::scoped($request)
+        $mine = AuditWorkflow::restrictedTo($request);
+        $query = self::scoped($request, $mine)
             ->with(['engagement.client:id,name', 'engagementProcess.assignee:id,name'])
             ->when($status === 'open', fn ($q) => $q->where('query_status', 'open'))
             ->when($status === 'closed', fn ($q) => $q->where('query_status', 'closed'))
@@ -31,7 +32,7 @@ class QueryController extends Controller
 
         $rows = $query->get()->map(fn ($t) => AuditWorkflow::presentQuery($t));
 
-        $base = self::scoped($request);
+        $base = self::scoped($request, $mine);
         return response()->json([
             'data' => $rows,
             'counts' => [
@@ -44,11 +45,15 @@ class QueryController extends Controller
         ]);
     }
 
-    /** Failed tests limited by optional client / fiscal year / period / engagement filters. */
-    public static function scoped(Request $request): Builder
+    /**
+     * Failed tests limited by optional client / fiscal year / period / engagement filters.
+     * $assignedTo limits them to processes assigned to that user (Auditors).
+     */
+    public static function scoped(Request $request, ?int $assignedTo = null): Builder
     {
         return ControlTest::query()
             ->whereNotNull('query_status')
+            ->when($assignedTo, fn ($q) => $q->whereHas('engagementProcess', fn ($w) => $w->where('assigned_to', $assignedTo)))
             ->whereHas('engagement', function ($q) use ($request) {
                 $q->when($request->query('client_id'), fn ($w, $v) => $w->where('client_id', $v))
                     ->when($request->query('fiscal_year'), fn ($w, $v) => $w->where('fiscal_year', $v))
