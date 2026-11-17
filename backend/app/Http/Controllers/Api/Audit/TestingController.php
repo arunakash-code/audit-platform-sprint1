@@ -59,7 +59,12 @@ class TestingController extends Controller
         ]]);
     }
 
-    /** Record population, sample, checks and pass/fail; a failure raises a query. */
+    /**
+     * Record testing. Each check carries its own population, samples tested, pass/fail
+     * and notes; the control's result is derived from them (any failed check fails the
+     * control, all checks passed passes it). A failed control raises a query.
+     * Controls without checks are recorded at control level.
+     */
     public function update(Request $request, ControlTest $controlTest): JsonResponse
     {
         $ep = $controlTest->engagementProcess;
@@ -70,36 +75,111 @@ class TestingController extends Controller
             return response()->json(['message' => 'This query already has retest history. Record a retest instead of changing the original result.'], 422);
         }
 
-        $checkIds = collect($controlTest->snapshot['checks'] ?? [])->pluck('id')->map(fn ($id) => (string) $id)->all();
-        $data = $request->validate([
-            'population' => ['nullable', 'integer', 'min:0', 'max:1000000000', 'required_with:result'],
-            'sample_size' => ['nullable', 'integer', 'min:0', 'max:1000000000', 'required_with:result'],
-            'result' => ['nullable', Rule::in(ControlTest::RESULTS)],
-            'check_results' => ['nullable', 'array'],
-            'check_results.*' => ['boolean'],
+        $checks = collect($controlTest->snapshot['checks'] ?? [])->values();
+        $checkIds = $checks->pluck('id')->map(fn ($id) => (string) $id)->all();
+        $perCheck = count($checkIds) > 0;
+
+        $rules = [
             'test_notes' => ['nullable', 'string', 'max:5000'],
-            'failure_reason' => ['nullable', 'required_if:result,fail', 'string', 'max:5000'],
-            'failed_samples' => ['nullable', 'required_if:result,fail', 'integer', 'min:1'],
-            'management_response' => ['nullable', 'required_if:result,fail', 'string', 'max:5000'],
-            'target_date' => ['nullable', 'required_if:result,fail', 'date'],
-            'responsible_person' => ['nullable', 'required_if:result,fail', 'string', 'max:150'],
-        ], [
+            'failure_reason' => ['nullable', 'string', 'max:5000'],
+            'failed_samples' => ['nullable', 'integer', 'min:1'],
+            'management_response' => ['nullable', 'string', 'max:5000'],
+            'target_date' => ['nullable', 'date'],
+            'responsible_person' => ['nullable', 'string', 'max:150'],
+        ];
+        if ($perCheck) {
+            $rules += [
+                'check_results' => ['nullable', 'array'],
+                'check_results.*' => ['array'],
+                'check_results.*.population' => ['nullable', 'integer', 'min:0', 'max:1000000000'],
+                'check_results.*.sample_size' => ['nullable', 'integer', 'min:0', 'max:1000000000'],
+                'check_results.*.result' => ['nullable', Rule::in(ControlTest::RESULTS)],
+                'check_results.*.notes' => ['nullable', 'string', 'max:5000'],
+            ];
+        } else {
+            $rules += [
+                'population' => ['nullable', 'integer', 'min:0', 'max:1000000000', 'required_with:result'],
+                'sample_size' => ['nullable', 'integer', 'min:0', 'max:1000000000', 'required_with:result'],
+                'result' => ['nullable', Rule::in(ControlTest::RESULTS)],
+            ];
+        }
+        $input = $request->validate($rules, [
             'population.required_with' => 'Enter the total population before recording a result.',
             'sample_size.required_with' => 'Enter how many samples were tested.',
-            '*.required_if' => 'Required when the control fails.',
         ]);
 
-        if (isset($data['population'], $data['sample_size']) && $data['sample_size'] > $data['population']) {
-            throw ValidationException::withMessages(['sample_size' => 'The sample cannot be larger than the population.']);
-        }
-        if (($data['result'] ?? null) === 'fail' && $data['failed_samples'] > ($data['sample_size'] ?? 0)) {
-            throw ValidationException::withMessages(['failed_samples' => 'Failed samples cannot exceed the samples tested.']);
-        }
-        $data['check_results'] = collect($data['check_results'] ?? [])->only($checkIds)->map(fn ($v) => (bool) $v)->all();
+        $errors = [];
+        $data = ['test_notes' => $input['test_notes'] ?? null];
 
-        if (($data['result'] ?? null) !== 'fail') {
-            // Passing (or untested) controls carry no query.
+        if ($perCheck) {
+            // Keep only known checks, in the checklist's order.
+            $raw = $input['check_results'] ?? [];
+            $rows = [];
+            foreach ($checks as $i => $check) {
+                $id = (string) $check['id'];
+                $r = $raw[$id] ?? [];
+                $row = [
+                    'population' => isset($r['population']) ? (int) $r['population'] : null,
+                    'sample_size' => isset($r['sample_size']) ? (int) $r['sample_size'] : null,
+                    'result' => $r['result'] ?? null,
+                    'notes' => isset($r['notes']) && trim((string) $r['notes']) !== '' ? trim((string) $r['notes']) : null,
+                ];
+                $n = $i + 1;
+                if ($row['result'] && $row['population'] === null) {
+                    $errors["check_results.$id.population"] = "Check $n: enter the total population before recording a result.";
+                }
+                if ($row['result'] && $row['sample_size'] === null) {
+                    $errors["check_results.$id.sample_size"] = "Check $n: enter how many samples were tested.";
+                }
+                if ($row['population'] !== null && $row['sample_size'] !== null && $row['sample_size'] > $row['population']) {
+                    $errors["check_results.$id.sample_size"] = "Check $n: samples tested cannot be larger than the population.";
+                }
+                if (array_filter($row, fn ($v) => $v !== null)) {
+                    $rows[$id] = $row;
+                }
+            }
+
+            $results = collect($checkIds)->map(fn ($id) => $rows[$id]['result'] ?? null);
+            $data['check_results'] = $rows;
+            // Any failed check fails the control (and raises a query); it passes only when every check has passed.
+            $data['result'] = $results->contains('fail') ? 'fail' : ($results->every(fn ($r) => $r === 'pass') ? 'pass' : null);
+            // Control-level figures for lists, dashboards and reports: the largest population and sample across checks.
+            $tested = collect($rows)->filter(fn ($r) => $r['result'] !== null);
+            $data['population'] = $tested->max('population');
+            $data['sample_size'] = $tested->max('sample_size');
+            $failedSampleCap = collect($rows)->where('result', 'fail')->sum('sample_size');
+        } else {
+            $data += [
+                'population' => $input['population'] ?? null,
+                'sample_size' => $input['sample_size'] ?? null,
+                'result' => $input['result'] ?? null,
+                'check_results' => [],
+            ];
+            if (isset($data['population'], $data['sample_size']) && $data['sample_size'] > $data['population']) {
+                $errors['sample_size'] = 'The sample cannot be larger than the population.';
+            }
+            $failedSampleCap = $data['sample_size'] ?? 0;
+        }
+
+        if ($data['result'] === 'fail') {
+            foreach (['failure_reason', 'failed_samples', 'management_response', 'target_date', 'responsible_person'] as $f) {
+                if (($input[$f] ?? null) === null || $input[$f] === '') {
+                    $errors[$f] = 'Required when the control fails.';
+                }
+                $data[$f] = $input[$f] ?? null;
+            }
+            if (($input['failed_samples'] ?? null) !== null && $input['failed_samples'] > $failedSampleCap) {
+                $errors['failed_samples'] = $perCheck
+                    ? "Failed samples cannot exceed the samples tested on the failed checks ($failedSampleCap)."
+                    : 'Failed samples cannot exceed the samples tested.';
+            }
+        } else {
+            // Passing (or not yet complete) controls carry no query.
             $data = array_merge($data, array_fill_keys(['failure_reason', 'failed_samples', 'management_response', 'target_date', 'responsible_person'], null));
+        }
+
+        if ($errors) {
+            throw ValidationException::withMessages($errors);
         }
 
         $before = $controlTest->only(['population', 'sample_size', 'result', 'failure_reason', 'failed_samples', 'management_response', 'target_date', 'responsible_person']);
