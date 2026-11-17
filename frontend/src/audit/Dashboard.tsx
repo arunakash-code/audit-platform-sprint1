@@ -4,6 +4,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { api } from "../lib/api";
 import { Card, EmptyState, LoadingBlock, PageHeader, Select } from "../components/ui";
+import { useCan } from "../admin/auth";
 import type { EngagementProcess, QueryRow } from "./types";
 import { DueBadge, ProgressLegend, RatingBadge, Stat, StatusBadge, TestProgress, fmtDate } from "./shared";
 
@@ -22,6 +23,7 @@ type Dash = {
 };
 
 export default function AuditDashboard() {
+  const ownOnly = !useCan()("audit.manage");
   const [filters, setFilters] = useState<{ fiscal_year?: string; period?: string; client_id?: string }>({});
   const navigate = useNavigate();
   const { data, isLoading } = useQuery({
@@ -40,7 +42,7 @@ export default function AuditDashboard() {
     <>
       <PageHeader
         title="Dashboard"
-        description="Testing status, queries raised and retests due for the selected period."
+        description={`Testing status, queries raised and retests due for the selected period${ownOnly ? " — showing only processes assigned to you" : ""}.`}
         actions={
           <>
             <Select aria-label="Fiscal year" value={String(f.fiscal_year ?? "")} onChange={(e) => set("fiscal_year", e.target.value)} className="w-36">
