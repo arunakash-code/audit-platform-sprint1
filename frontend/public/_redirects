@@ -1,0 +1,7 @@
+# Netlify: proxy the API through this site so the browser sees one origin
+# (Sanctum session cookies + CSRF then work without cross-site cookies).
+/api/*      https://audit-platform-api-a2bs.onrender.com/api/:splat      200
+/sanctum/*  https://audit-platform-api-a2bs.onrender.com/sanctum/:splat  200
+
+# SPA fallback for React Router
+/*          /index.html   200
