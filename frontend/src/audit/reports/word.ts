@@ -144,10 +144,17 @@ export async function downloadWordReport(r: ReportData) {
     annex.push(heading(`${p.name}${p.assignee ? ` — tested by ${p.assignee}` : ""}`, HeadingLevel.HEADING_2));
     const rows: (string | Paragraph[])[][] = [];
     p.risks.forEach((risk) => risk.controls.forEach((c) => {
-      const checks = c.snapshot.checks.map((k) => new Paragraph({
-        spacing: { after: 30 },
-        children: [run(`${c.check_results[k.id] ? "✓" : "–"} ${k.description}`, { size: 16, color: c.check_results[k.id] ? INK : MUTED })],
-      }));
+      const checks = c.snapshot.checks.flatMap((k) => {
+        const cr = c.check_results[k.id];
+        const mark = cr?.result === "pass" ? "✓" : cr?.result === "fail" ? "✗" : "–";
+        const figures = cr?.result ? ` (${cr.sample_size ?? "—"} of ${cr.population ?? "—"} · ${resultText(cr.result)})` : "";
+        const lines = [new Paragraph({
+          spacing: { after: cr?.notes ? 0 : 30 },
+          children: [run(`${mark} ${k.description}${figures}`, { size: 16, color: cr?.result === "fail" ? RED : cr?.result ? INK : MUTED })],
+        })];
+        if (cr?.notes) lines.push(new Paragraph({ spacing: { after: 30 }, children: [run(`   ${cr.notes}`, { size: 15, color: MUTED, italics: true })] }));
+        return lines;
+      });
       rows.push([
         `${risk.code ?? ""} ${risk.title}\n(${risk.rating} risk)`,
         `${c.snapshot.control_code ?? ""} ${c.snapshot.control_title}`,
