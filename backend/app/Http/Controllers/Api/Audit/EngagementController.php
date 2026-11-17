@@ -16,15 +16,21 @@ class EngagementController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        // Auditors only see engagements where they have assigned work, counted over their processes only.
+        $mine = AuditWorkflow::restrictedTo($request);
+        $ownProcesses = fn ($q) => $mine ? $q->where('assigned_to', $mine) : $q;
+        $ownTests = fn ($q) => $mine ? $q->whereHas('engagementProcess', fn ($w) => $w->where('assigned_to', $mine)) : $q;
+
         $engagements = Engagement::with('client:id,name')
             ->withCount([
-                'processes',
-                'processes as processes_completed' => fn ($q) => $q->where('status', 'completed'),
-                'tests as controls_total',
-                'tests as controls_tested' => fn ($q) => $q->whereNotNull('result'),
-                'tests as controls_failed' => fn ($q) => $q->where('result', 'fail'),
-                'tests as open_queries' => fn ($q) => $q->where('query_status', 'open'),
+                'processes' => $ownProcesses,
+                'processes as processes_completed' => fn ($q) => $ownProcesses($q->where('status', 'completed')),
+                'tests as controls_total' => $ownTests,
+                'tests as controls_tested' => fn ($q) => $ownTests($q->whereNotNull('result')),
+                'tests as controls_failed' => fn ($q) => $ownTests($q->where('result', 'fail')),
+                'tests as open_queries' => fn ($q) => $ownTests($q->where('query_status', 'open')),
             ])
+            ->when($mine, fn ($q) => $q->whereHas('processes', fn ($w) => $w->where('assigned_to', $mine)))
             ->when($request->query('client_id'), fn ($q, $v) => $q->where('client_id', $v))
             ->when($request->query('fiscal_year'), fn ($q, $v) => $q->where('fiscal_year', $v))
             ->when($request->query('status'), fn ($q, $v) => $q->where('status', $v))
@@ -50,7 +56,15 @@ class EngagementController extends Controller
 
     public function show(Request $request, Engagement $engagement): JsonResponse
     {
-        $engagement->load(['client', 'processes.assignee:id,name']);
+        $mine = AuditWorkflow::restrictedTo($request);
+        if ($mine && !$engagement->processes()->where('assigned_to', $mine)->exists()) {
+            return response()->json(['message' => 'This engagement has no work assigned to you.'], 404);
+        }
+        $engagement->load([
+            'client',
+            'processes' => fn ($q) => $mine ? $q->where('assigned_to', $mine) : $q,
+            'processes.assignee:id,name',
+        ]);
         $counts = AuditWorkflow::processCounts($engagement->processes->pluck('id')->all());
         $processes = $engagement->processes->map(fn ($ep) => AuditWorkflow::presentProcess($ep, $counts[$ep->id] ?? []));
 
@@ -154,6 +168,9 @@ class EngagementController extends Controller
      */
     public function report(Request $request, Engagement $engagement): JsonResponse
     {
+        if (AuditWorkflow::restrictedTo($request)) {
+            return response()->json(['message' => 'Only managers can generate engagement reports.'], 403);
+        }
         $format = $request->validate(['format' => ['required', Rule::in(['word', 'ppt'])]])['format'];
         if ($engagement->status !== 'completed') {
             return response()->json(['message' => 'Reports can be generated once every process in this engagement has been fully tested.'], 422);
