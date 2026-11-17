@@ -23,7 +23,7 @@ export default function Engagements() {
     <>
       <PageHeader
         title="Engagements"
-        description="One engagement per client, audit type and period. Open one to choose processes and assign the team."
+        description={can("audit.manage") ? "One engagement per client, audit type and period. Open one to choose processes and assign the team." : "Engagements where processes are assigned to you."}
         actions={
           <>
             <Select aria-label="Client" value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-52">
