@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Audit;
 use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Services\AuditLogger;
+use App\Services\AuditWorkflow;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -13,8 +14,10 @@ class ClientController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        $mine = AuditWorkflow::restrictedTo($request);
         $clients = Client::query()
             ->withCount('engagements')
+            ->when($mine, fn ($q) => $q->whereHas('engagements.processes', fn ($w) => $w->where('assigned_to', $mine)))
             ->when($request->query('search'), fn ($q, $s) => $q->where(fn ($w) => $w->where('name', 'like', "%$s%")->orWhere('code', 'like', "%$s%")))
             ->when($request->query('status'), fn ($q, $s) => $q->where('status', $s))
             ->orderBy('name')
