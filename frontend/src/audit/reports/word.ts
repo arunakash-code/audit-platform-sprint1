@@ -147,7 +147,7 @@ export async function downloadWordReport(r: ReportData) {
       const checks = c.snapshot.checks.flatMap((k) => {
         const cr = c.check_results[k.id];
         const mark = cr?.result === "pass" ? "✓" : cr?.result === "fail" ? "✗" : "–";
-        const figures = cr?.result ? ` (${cr.sample_size ?? "—"} of ${cr.population ?? "—"} · ${resultText(cr.result)})` : "";
+        const figures = cr?.result ? ` (${cr.sample_size ?? "—"} of ${cr.population ?? "—"} · ${resultText(cr.result)})` : cr?.notes ? " (Not tested)" : "";
         const lines = [new Paragraph({
           spacing: { after: cr?.notes ? 0 : 30 },
           children: [run(`${mark} ${k.description}${figures}`, { size: 16, color: cr?.result === "fail" ? RED : cr?.result ? INK : MUTED })],
