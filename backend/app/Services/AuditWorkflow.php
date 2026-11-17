@@ -30,6 +30,15 @@ class AuditWorkflow
         return in_array($permission, $perms, true);
     }
 
+    /**
+     * Users without audit.manage (the Auditor role) only see work assigned to them.
+     * Returns their user id to filter by, or null when they may see everything.
+     */
+    public static function restrictedTo(Request $request): ?int
+    {
+        return self::can($request, 'audit.manage') ? null : (int) $request->user()->id;
+    }
+
     /** Managers can work on any process; testers only on processes assigned to them. */
     public static function canTest(Request $request, EngagementProcess $ep): bool
     {
