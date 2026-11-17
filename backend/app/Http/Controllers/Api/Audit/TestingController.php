@@ -34,6 +34,10 @@ class TestingController extends Controller
     /** Testing workspace: process → risks → controls (with checks and results). */
     public function showProcess(Request $request, EngagementProcess $engagementProcess): JsonResponse
     {
+        $mine = AuditWorkflow::restrictedTo($request);
+        if ($mine && (int) $engagementProcess->assigned_to !== $mine) {
+            return response()->json(['message' => 'This process is not assigned to you.'], 403);
+        }
         $ep = $engagementProcess->load(['engagement.client:id,name', 'assignee:id,name', 'tests.tester:id,name']);
         $counts = AuditWorkflow::processCounts([$ep->id]);
 
