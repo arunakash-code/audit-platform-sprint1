@@ -31,17 +31,28 @@ class PerCheckTestingTest extends TestCase
             ->putJson("http://localhost/api/v1/audit/control-tests/{$t->id}", $payload);
     }
 
-    public function test_partial_checks_leave_control_untested_and_all_pass_passes_it(): void
+    public function test_untested_checks_need_a_reason_and_all_pass_passes_it(): void
     {
         $t = $this->untestedControl();
         $ids = collect($t->snapshot['checks'])->pluck('id')->map(fn ($i) => (string) $i)->all();
 
+        // A check left without Pass/Fail must explain why.
         $partial = [$ids[0] => ['population' => 10, 'sample_size' => 8, 'result' => 'pass', 'notes' => 'All passed']];
         $this->saveTest($t, ['check_results' => $partial])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(["check_results.{$ids[1]}.notes"]);
+
+        $withReasons = $partial + collect(array_slice($ids, 1))->mapWithKeys(fn ($id) => [$id => ['notes' => 'No duplicates flagged in the period']])->all();
+        $this->saveTest($t, ['check_results' => $withReasons])
             ->assertOk()
-            ->assertJsonPath('data.test.result', null)
+            ->assertJsonPath('data.test.result', 'pass')
             ->assertJsonPath("data.test.check_results.{$ids[0]}.sample_size", 8)
-            ->assertJsonPath("data.test.check_results.{$ids[0]}.notes", 'All passed');
+            ->assertJsonPath("data.test.check_results.{$ids[1]}.result", null)
+            ->assertJsonPath("data.test.check_results.{$ids[1]}.notes", 'No duplicates flagged in the period');
+
+        // Every check given only a reason (none tested) leaves the control untested.
+        $none = collect($ids)->mapWithKeys(fn ($id) => [$id => ['notes' => 'Not applicable this period']])->all();
+        $this->saveTest($t, ['check_results' => $none])->assertOk()->assertJsonPath('data.test.result', null);
 
         $all = collect($ids)->mapWithKeys(fn ($id, $i) => [$id => ['population' => 20 + $i, 'sample_size' => 5 + $i, 'result' => 'pass']])->all();
         $this->saveTest($t, ['check_results' => $all])
@@ -55,10 +66,9 @@ class PerCheckTestingTest extends TestCase
     {
         $t = $this->untestedControl();
         $ids = collect($t->snapshot['checks'])->pluck('id')->map(fn ($i) => (string) $i)->all();
-        $checks = [
-            $ids[0] => ['population' => 10, 'sample_size' => 8, 'result' => 'pass'],
-            $ids[1] => ['population' => 12, 'sample_size' => 4, 'result' => 'fail', 'notes' => '1 missing approval'],
-        ];
+        $checks = collect($ids)->mapWithKeys(fn ($id) => [$id => ['notes' => 'Not required this period']])->all();
+        $checks[$ids[0]] = ['population' => 10, 'sample_size' => 8, 'result' => 'pass'];
+        $checks[$ids[1]] = ['population' => 12, 'sample_size' => 4, 'result' => 'fail', 'notes' => '1 missing approval'];
 
         $this->saveTest($t, ['check_results' => $checks])
             ->assertStatus(422)
