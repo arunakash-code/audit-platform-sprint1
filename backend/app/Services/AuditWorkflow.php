@@ -167,6 +167,35 @@ class AuditWorkflow
         ];
     }
 
+    /**
+     * Per-check testing data keyed by check id: population, sample_size, result, notes.
+     * Older records stored a plain "done" boolean per check; those inherit the
+     * control-level figures so historical results still display correctly.
+     */
+    public static function checkResults(ControlTest $t): array
+    {
+        $out = [];
+        foreach (($t->check_results ?? []) as $id => $value) {
+            if (is_array($value)) {
+                $out[(string) $id] = [
+                    'population' => isset($value['population']) ? (int) $value['population'] : null,
+                    'sample_size' => isset($value['sample_size']) ? (int) $value['sample_size'] : null,
+                    'result' => in_array($value['result'] ?? null, ControlTest::RESULTS, true) ? $value['result'] : null,
+                    'notes' => isset($value['notes']) && $value['notes'] !== '' ? (string) $value['notes'] : null,
+                ];
+            } elseif ($value) {
+                $out[(string) $id] = [
+                    'population' => $t->population,
+                    'sample_size' => $t->sample_size,
+                    'result' => $t->result,
+                    'notes' => null,
+                ];
+            }
+        }
+
+        return $out;
+    }
+
     public static function presentTest(ControlTest $t): array
     {
         return [
@@ -177,7 +206,7 @@ class AuditWorkflow
             'population' => $t->population,
             'sample_size' => $t->sample_size,
             'result' => $t->result,
-            'check_results' => (object) ($t->check_results ?? []),
+            'check_results' => (object) self::checkResults($t),
             'test_notes' => $t->test_notes,
             'tested_by' => $t->tester ? ['id' => $t->tester->id, 'name' => $t->tester->name] : null,
             'tested_at' => $t->tested_at,
