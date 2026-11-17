@@ -8,6 +8,7 @@ use App\Models\AuditProcess;
 use App\Models\AuditRisk;
 use App\Models\Client;
 use App\Models\Engagement;
+use App\Services\AuditWorkflow;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,7 +23,9 @@ class MetaController extends Controller
         $fy = Engagement::fiscalYearOf($today);
 
         return response()->json(['data' => [
-            'clients' => Client::query()->where('status', 'active')->orderBy('name')->get(['id', 'name', 'code']),
+            'clients' => Client::query()->where('status', 'active')
+                ->when(AuditWorkflow::restrictedTo($request), fn ($q, $mine) => $q->whereHas('engagements.processes', fn ($w) => $w->where('assigned_to', $mine)))
+                ->orderBy('name')->get(['id', 'name', 'code']),
             'processes' => AuditProcess::query()
                 ->withCount(['risks', 'controls'])
                 ->orderBy('sort_order')->orderBy('name')
