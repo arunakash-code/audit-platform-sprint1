@@ -61,8 +61,9 @@ class TestingController extends Controller
 
     /**
      * Record testing. Each check carries its own population, samples tested, pass/fail
-     * and notes; the control's result is derived from them (any failed check fails the
-     * control, all checks passed passes it). A failed control raises a query.
+     * and notes. A check without Pass/Fail must say why it was not tested. The control's
+     * result is derived: any failed check fails it (raising a query); otherwise it passes
+     * when at least one check passed.
      * Controls without checks are recorded at control level.
      */
     public function update(Request $request, ControlTest $controlTest): JsonResponse
@@ -131,6 +132,9 @@ class TestingController extends Controller
                 if ($row['result'] && $row['sample_size'] === null) {
                     $errors["check_results.$id.sample_size"] = "Check $n: enter how many samples were tested.";
                 }
+                if (!$row['result'] && $row['notes'] === null) {
+                    $errors["check_results.$id.notes"] = "Check $n: select Pass or Fail, or explain why this check was not tested.";
+                }
                 if ($row['population'] !== null && $row['sample_size'] !== null && $row['sample_size'] > $row['population']) {
                     $errors["check_results.$id.sample_size"] = "Check $n: samples tested cannot be larger than the population.";
                 }
@@ -141,8 +145,9 @@ class TestingController extends Controller
 
             $results = collect($checkIds)->map(fn ($id) => $rows[$id]['result'] ?? null);
             $data['check_results'] = $rows;
-            // Any failed check fails the control (and raises a query); it passes only when every check has passed.
-            $data['result'] = $results->contains('fail') ? 'fail' : ($results->every(fn ($r) => $r === 'pass') ? 'pass' : null);
+            // Any failed check fails the control (and raises a query). Otherwise it passes once at least one
+            // check has passed and every other check carries a reason for not being tested.
+            $data['result'] = $results->contains('fail') ? 'fail' : ($results->contains('pass') ? 'pass' : null);
             // Control-level figures for lists, dashboards and reports: the largest population and sample across checks.
             $tested = collect($rows)->filter(fn ($r) => $r['result'] !== null);
             $data['population'] = $tested->max('population');
