@@ -53,6 +53,14 @@ export type EngagementProcess = {
 
 export type Check = { id: number; description: string };
 
+/** Testing recorded against one check of a control. */
+export type CheckResult = {
+  population: number | null;
+  sample_size: number | null;
+  result: "pass" | "fail" | null;
+  notes: string | null;
+};
+
 export type Snapshot = {
   risk_id: number;
   risk_code: string | null;
@@ -87,7 +95,7 @@ export type ControlTest = {
   population: number | null;
   sample_size: number | null;
   result: "pass" | "fail" | null;
-  check_results: Record<string, boolean>;
+  check_results: Record<string, CheckResult>;
   test_notes: string | null;
   tested_by: { id: number; name: string } | null;
   tested_at: string | null;
