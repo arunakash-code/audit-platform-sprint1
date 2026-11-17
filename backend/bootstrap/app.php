@@ -19,6 +19,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // Sanctum SPA cookie auth for first-party frontends listed in SANCTUM_STATEFUL_DOMAINS.
         $middleware->statefulApi();
 
+        // Behind Render's load balancer (and the Netlify proxy): trust X-Forwarded-* so
+        // Laravel sees HTTPS and secure session cookies are issued correctly.
+        $middleware->trustProxies(at: '*');
+
         $middleware->alias([
             'tenant' => ResolveTenant::class,
             'tenant.member' => EnsureTenantMember::class,
