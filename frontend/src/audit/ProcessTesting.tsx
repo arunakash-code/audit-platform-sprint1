@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronLeft, CircleDashed, Copy, Eye, ListChecks, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronLeft, CircleDashed, CircleMinus, Copy, Eye, ListChecks, XCircle } from "lucide-react";
 import { api, apiError, type ValidationErrors } from "../lib/api";
 import { Alert, Badge, Button, Card, Drawer, Field, Input, LoadingBlock, Textarea, cx } from "../components/ui";
 import type { CheckResult, ControlTest, EngagementProcess, RiskGroup } from "./types";
@@ -127,12 +127,16 @@ const toCheckForm = (r?: CheckResult): CheckForm => ({
   population: asStr(r?.population), sample_size: asStr(r?.sample_size), result: r?.result ?? "", notes: r?.notes ?? "",
 });
 
-/** Any failed check fails the control; it passes only when every check has passed. */
+/**
+ * Any failed check fails the control. Otherwise it passes once a check has passed —
+ * every check without Pass/Fail must carry a reason for not being tested.
+ */
 function deriveResult(checks: CheckForm[]): "" | "pass" | "fail" {
-  if (!checks.length) return "";
   if (checks.some((c) => c.result === "fail")) return "fail";
-  return checks.every((c) => c.result === "pass") ? "pass" : "";
+  return checks.some((c) => c.result === "pass") ? "pass" : "";
 }
+
+const needsReason = (c: CheckForm) => !c.result && !c.notes.trim();
 
 function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: ControlTest; canTest: boolean; onClose: () => void; onSavedNext: () => void }) {
   const qc = useQueryClient();
@@ -162,6 +166,23 @@ function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: Contr
   const failedCap = rows.filter((r) => r.result === "fail").reduce((n, r) => n + (Number(r.sample_size) || 0), 0);
   const firstPopulation = rows[0]?.population ?? "";
   const canCopyPopulation = editable && perCheck && s.checks.length > 1 && firstPopulation !== "" && rows.some((r) => r.population !== firstPopulation);
+
+  /** A check without Pass/Fail must explain why it was not tested. */
+  const submit = (next: boolean) => {
+    if (perCheck) {
+      const missing: ValidationErrors = {};
+      s.checks.forEach((c, i) => {
+        if (needsReason(checks[c.id])) missing[`check_results.${c.id}.notes`] = [`Check ${i + 1}: select Pass or Fail, or explain why this check was not tested.`];
+      });
+      if (Object.keys(missing).length) {
+        setErrors(missing);
+        setError("");
+        document.getElementById(`check-${Object.keys(missing)[0].split(".")[1]}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+    }
+    save.mutate(next);
+  };
 
   const save = useMutation({
     mutationFn: async (_next: boolean) => api.put(`/audit/control-tests/${t.id}`, {
@@ -195,8 +216,8 @@ function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: Contr
           <ResultSummary result={result} tested={tested} total={s.checks.length} perCheck={perCheck} />
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button variant="secondary" loading={save.isPending && save.variables === false} onClick={() => save.mutate(false)}>Save</Button>
-            <Button loading={save.isPending && save.variables === true} onClick={() => save.mutate(true)}>Save &amp; next untested</Button>
+            <Button variant="secondary" loading={save.isPending && save.variables === false} onClick={() => submit(false)}>Save</Button>
+            <Button loading={save.isPending && save.variables === true} onClick={() => submit(true)}>Save &amp; next untested</Button>
           </div>
         </div>
       ) : undefined}>
@@ -232,18 +253,19 @@ function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: Contr
             <ol className="space-y-3">
               {s.checks.map((c, i) => {
                 const r = checks[c.id];
+                const skipped = !r.result && !!r.notes.trim();
                 return (
-                  <li key={c.id} className={cx(
-                    "rounded-xl border bg-white transition-colors",
-                    r.result === "fail" ? "border-danger/40" : r.result === "pass" ? "border-accent/35" : "border-line",
+                  <li key={c.id} id={`check-${c.id}`} className={cx(
+                    "scroll-mt-4 rounded-xl border bg-white transition-colors",
+                    r.result === "fail" ? "border-danger/40" : r.result === "pass" ? "border-accent/35" : skipped ? "border-amber/35" : checkErr(c.id, "notes") ? "border-danger/50" : "border-line",
                   )}>
                     <div className={cx("flex items-start gap-3 rounded-t-xl px-4 py-3",
-                      r.result === "fail" ? "bg-danger-soft/50" : r.result === "pass" ? "bg-accent-soft/50" : "bg-paper/60")}>
-                      <CheckStatusIcon result={r.result} />
+                      r.result === "fail" ? "bg-danger-soft/50" : r.result === "pass" ? "bg-accent-soft/50" : skipped ? "bg-amber-soft/50" : "bg-paper/60")}>
+                      <CheckStatusIcon result={r.result} skipped={skipped} />
                       <p className="min-w-0 flex-1 text-sm leading-snug">
                         <span className="mr-1.5 font-mono text-[11px] text-muted">{i + 1}.</span>{c.description}
                       </p>
-                      <StatusBadge status={r.result || null} />
+                      {skipped ? <Badge tone="amber" className="normal-case!">Not tested</Badge> : <StatusBadge status={r.result || null} />}
                     </div>
                     <fieldset disabled={!editable} className="grid gap-3 px-4 py-3 sm:grid-cols-[1fr_1fr_auto]">
                       <Field label="Total population" error={checkErr(c.id, "population")}>
@@ -267,9 +289,16 @@ function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: Contr
                         </div>
                         {checkErr(c.id, "result") && <p className="mt-1 text-xs text-danger">{checkErr(c.id, "result")}</p>}
                       </div>
-                      <Field label="Testing notes (optional)" error={checkErr(c.id, "notes")} className="sm:col-span-3">
-                        <Textarea rows={2} value={r.notes} placeholder={r.result === "fail" ? "What was wrong with the samples?" : "Evidence inspected, exceptions noted…"}
-                          onChange={(e) => setCheck(c.id, { notes: e.target.value })} />
+                      <Field
+                        label={r.result ? "Testing notes (optional)" : "Reason for not testing (required if no Pass/Fail)"}
+                        error={checkErr(c.id, "notes")}
+                        className="sm:col-span-3">
+                        <Textarea rows={2} value={r.notes} aria-required={!r.result}
+                          placeholder={r.result === "fail" ? "What was wrong with the samples?" : r.result === "pass" ? "Evidence inspected, exceptions noted…" : "Why was this check not tested? e.g. no transactions in the period, evidence not provided…"}
+                          onChange={(e) => {
+                            setCheck(c.id, { notes: e.target.value });
+                            if (checkErr(c.id, "notes")) setErrors(({ [`check_results.${c.id}.notes`]: _drop, ...rest }) => rest);
+                          }} />
                       </Field>
                     </fieldset>
                   </li>
@@ -325,10 +354,11 @@ function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: Contr
   );
 }
 
-function CheckStatusIcon({ result }: { result: string }) {
+function CheckStatusIcon({ result, skipped }: { result: string; skipped?: boolean }) {
   if (result === "pass") return <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-accent" aria-label="Passed" />;
   if (result === "fail") return <XCircle className="mt-0.5 size-4 shrink-0 text-danger" aria-label="Failed" />;
-  return <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted" aria-label="Not tested" />;
+  if (skipped) return <CircleMinus className="mt-0.5 size-4 shrink-0 text-amber" aria-label="Not tested — reason given" />;
+  return <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted" aria-label="Untested" />;
 }
 
 /** Control-level outcome derived from the checks. */
