@@ -47,12 +47,13 @@ const spacer = () => new Paragraph({ spacing: { after: 120 }, children: [] });
 const line = { style: BorderStyle.SINGLE, size: 4, color: BORDER };
 const borders = { top: line, bottom: line, left: line, right: line, insideHorizontal: line, insideVertical: line };
 
-type CellOpts = { fill?: string; color?: string; bold?: boolean; italics?: boolean; align?: Align; width?: number; size?: number };
+type CellOpts = { fill?: string; color?: string; bold?: boolean; italics?: boolean; align?: Align; width?: number; size?: number; edge?: string };
 function cell(content: string | Paragraph[], o: CellOpts = {}) {
   const children = typeof content === "string"
     ? content.split("\n").map((t, i, all) => new Paragraph({
         alignment: o.align,
-        spacing: { after: i === all.length - 1 ? 0 : 60 },
+        // Header cells pad with paragraph spacing instead of cell margins (renders the same in Word, WPS and Google Docs).
+        spacing: o.edge ? { before: i === 0 ? 80 : 0, after: i === all.length - 1 ? 80 : 60 } : { after: i === all.length - 1 ? 0 : 60 },
         children: [run(t, { bold: o.bold, italics: o.italics, color: o.color, size: o.size ?? 20 })],
       }))
     : content;
@@ -61,10 +62,15 @@ function cell(content: string | Paragraph[], o: CellOpts = {}) {
     verticalAlign: VerticalAlign.CENTER,
     width: o.width ? { size: o.width, type: WidthType.PERCENTAGE } : undefined,
     shading: o.fill ? { type: ShadingType.CLEAR, color: "auto", fill: o.fill } : undefined,
-    margins: { top: 80, bottom: 80, left: 120, right: 120 },
+    margins: { top: o.edge ? 0 : 80, bottom: o.edge ? 0 : 80, left: 120, right: 120 },
+    // Coloured cells draw their top/bottom edges in their own colour, so the light-grey table
+    // border doesn't show as a pale stripe under a dark header row.
+    borders: o.edge
+      ? { top: { style: BorderStyle.SINGLE, size: 4, color: o.edge }, bottom: { style: BorderStyle.SINGLE, size: 4, color: o.edge } }
+      : undefined,
   });
 }
-const headCell = (t: string, width?: number, align?: Align) => cell(t, { fill: NAVY, color: "FFFFFF", bold: true, width, align });
+const headCell = (t: string, width?: number, align?: Align) => cell(t, { fill: NAVY, color: "FFFFFF", bold: true, width, align, edge: NAVY });
 const labelCell = (t: string, width = 28) => cell(t, { fill: LABEL_FILL, bold: true, width });
 const ratingCell = (rating: string, o: { width?: number; align?: Align } = {}) =>
   cell(rating, { fill: RATING_FILL[rating] ?? GREY, color: "FFFFFF", bold: true, ...o });
