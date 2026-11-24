@@ -70,8 +70,10 @@ function cell(content: string | Paragraph[], o: CellOpts = {}) {
 }
 const headCell = (t: string, width?: number, align?: Align) => cell(t, { fill: NAVY, color: "FFFFFF", bold: true, width, align, edge: NAVY });
 const labelCell = (t: string, width = 28) => cell(t, { fill: LABEL_FILL, bold: true, width });
-const ratingCell = (rating: string, o: { width?: number; align?: Align } = {}) =>
-  cell(rating, { fill: RATING_FILL[rating] ?? GREY, color: "FFFFFF", bold: true, ...o });
+const ratingCell = (rating: string, o: { width?: number; align?: Align } = {}) => {
+  const fill = RATING_FILL[rating] ?? GREY;
+  return cell(rating, { fill, color: "FFFFFF", bold: true, edge: fill, ...o });
+};
 
 const table = (rows: TableRow[]) => new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders, rows });
 const headerRow = (labels: string[], widths?: number[], align?: Align) =>
