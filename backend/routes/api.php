@@ -100,6 +100,7 @@ Route::prefix('v1')->group(function () {
                     Route::put('engagement-processes/{engagementProcess}', [EngagementController::class, 'updateProcess']);
                     Route::delete('engagement-processes/{engagementProcess}', [EngagementController::class, 'removeProcess']);
                     Route::get('engagements/{engagement}/report', [EngagementController::class, 'report']);
+                    Route::put('engagements/{engagement}/report-details', [EngagementController::class, 'updateReportDetails']);
 
                     Route::post('library/processes', [LibraryController::class, 'storeProcess']);
                     Route::put('library/processes/{process}', [LibraryController::class, 'updateProcess']);

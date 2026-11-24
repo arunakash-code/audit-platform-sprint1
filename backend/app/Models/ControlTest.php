@@ -12,11 +12,12 @@ class ControlTest extends Model
     use BelongsToTenant;
 
     public const RESULTS = ['pass', 'fail'];
+    public const AGREEMENTS = ['agreed', 'partially_agreed', 'not_agreed'];
 
     protected $fillable = [
         'tenant_id', 'engagement_id', 'engagement_process_id', 'control_id', 'snapshot', 'sort_order',
         'population', 'sample_size', 'result', 'check_results', 'test_notes', 'tested_by', 'tested_at',
-        'failure_reason', 'failed_samples', 'management_response', 'target_date', 'responsible_person',
+        'failure_reason', 'failed_samples', 'management_response', 'recommendation', 'management_agreement', 'target_date', 'responsible_person',
         'query_status', 'retests', 'closed_at',
     ];
 

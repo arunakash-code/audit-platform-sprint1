@@ -1,191 +1,350 @@
+/**
+ * Detailed Word report, laid out to match the firm's "Internal Audit Report" template:
+ * cover (reference table) → Contents → 1 Scope & Objectives → 2 Period of Coverage → 3 Risk Rating Methodology
+ * → 4 Executive Summary → 5 Detailed Observations → 6 Conclusion & sign-off → Annexure A Abbreviations
+ * → Annexure B Testing performed (landscape, every control and check).
+ */
 import {
   AlignmentType, BorderStyle, Document, Footer, Header, HeadingLevel, Packer, PageBreak, PageNumber, PageOrientation,
-  Paragraph, ShadingType, Table, TableCell, TableRow, TextRun, WidthType,
+  Paragraph, ShadingType, Table, TableCell, TableOfContents, TableRow, TextRun, VerticalAlign, WidthType,
 } from "docx";
 import { downloadBlob } from "../shared";
-import { auditTypeLabel, fileBase, longDate, type ReportData } from "./types";
+import type { QueryRow } from "../types";
+import { auditTypeLabel, fileBase, type ReportData } from "./types";
 
-const INK = "14161A";
-const MUTED = "5D6370";
-const ACCENT = "1F6F5C";
-const LINE = "D9D6CC";
-const HEAD_FILL = "EFEDE6";
-const RED = "B42318";
+// ---- Template palette ---------------------------------------------------------
+const NAVY = "1F3864";
+const INK = "000000";
+const GREY = "7F7F7F";
+const LABEL_FILL = "F2F2F2";
+const BORDER = "BFBFBF";
+const RATING_FILL: Record<string, string> = { High: "C00000", Medium: "ED7D31", Low: "70AD47" };
+const RATING_ACTION: Record<string, [string, string]> = {
+  High: ["Significant control weakness or non-compliance that could lead to material financial loss, fraud, regulatory penalty or serious reputational damage.", "Immediate action; within 30 days"],
+  Medium: ["Control weakness that could affect the achievement of process objectives or cause moderate financial or compliance exposure.", "Action within 60–90 days"],
+  Low: ["Minor weakness or improvement opportunity with limited impact; good practice recommendation.", "Action within 90–180 days"],
+};
+const RANK: Record<string, number> = { High: 0, Medium: 1, Low: 2 };
+const AGREEMENT: Record<string, string> = { agreed: "Agreed", partially_agreed: "Partially agreed", not_agreed: "Not agreed" };
 
-const run = (text: string, o: { bold?: boolean; color?: string; size?: number; italics?: boolean } = {}) => new TextRun({ text, ...o });
-const para = (text: string | TextRun[], o: { bold?: boolean; color?: string; size?: number; after?: number; align?: (typeof AlignmentType)[keyof typeof AlignmentType] } = {}) =>
+type Align = (typeof AlignmentType)[keyof typeof AlignmentType];
+type RunOpts = { bold?: boolean; italics?: boolean; color?: string; size?: number };
+
+// ---- Small builders -------------------------------------------------------------
+const run = (text: string, o: RunOpts = {}) => new TextRun({ text, ...o });
+const p = (children: string | TextRun[], o: { after?: number; before?: number; align?: Align; size?: number; color?: string; bold?: boolean; italics?: boolean } = {}) =>
   new Paragraph({
     alignment: o.align,
-    spacing: { after: o.after ?? 120 },
-    children: typeof text === "string" ? [run(text, { bold: o.bold, color: o.color, size: o.size })] : text,
+    spacing: { before: o.before ?? 0, after: o.after ?? 160 },
+    children: typeof children === "string" ? [run(children, { size: o.size, color: o.color, bold: o.bold, italics: o.italics })] : children,
   });
-const heading = (text: string, level: (typeof HeadingLevel)[keyof typeof HeadingLevel] = HeadingLevel.HEADING_1) =>
-  new Paragraph({ heading: level, spacing: { before: 240, after: 120 }, children: [run(text)] });
+const h1 = (text: string) => new Paragraph({ heading: HeadingLevel.HEADING_1, keepNext: true, spacing: { before: 360, after: 160 }, children: [run(text)] });
+const h2 = (text: string) => new Paragraph({ heading: HeadingLevel.HEADING_2, keepNext: true, spacing: { before: 240, after: 120 }, children: [run(text)] });
+const bullet = (text: string) => new Paragraph({ bullet: { level: 0 }, spacing: { after: 80 }, children: [run(text)] });
+const pageBreak = () => new Paragraph({ children: [new PageBreak()] });
+const spacer = () => new Paragraph({ spacing: { after: 120 }, children: [] });
 
-const border = { style: BorderStyle.SINGLE, size: 4, color: LINE };
-const borders = { top: border, bottom: border, left: border, right: border, insideHorizontal: border, insideVertical: border };
+const line = { style: BorderStyle.SINGLE, size: 4, color: BORDER };
+const borders = { top: line, bottom: line, left: line, right: line, insideHorizontal: line, insideVertical: line };
 
-function cell(content: string | Paragraph[], o: { header?: boolean; width?: number; color?: string; bold?: boolean; size?: number } = {}) {
+type CellOpts = { fill?: string; color?: string; bold?: boolean; italics?: boolean; align?: Align; width?: number; size?: number };
+function cell(content: string | Paragraph[], o: CellOpts = {}) {
   const children = typeof content === "string"
-    ? content.split("\n").map((line) => new Paragraph({ spacing: { after: 40 }, children: [run(line, { bold: o.header || o.bold, color: o.color, size: o.size ?? 18 })] }))
+    ? content.split("\n").map((t, i, all) => new Paragraph({
+        alignment: o.align,
+        spacing: { after: i === all.length - 1 ? 0 : 60 },
+        children: [run(t, { bold: o.bold, italics: o.italics, color: o.color, size: o.size ?? 20 })],
+      }))
     : content;
   return new TableCell({
     children,
+    verticalAlign: VerticalAlign.CENTER,
     width: o.width ? { size: o.width, type: WidthType.PERCENTAGE } : undefined,
-    shading: o.header ? { type: ShadingType.CLEAR, color: "auto", fill: HEAD_FILL } : undefined,
-    margins: { top: 60, bottom: 60, left: 100, right: 100 },
+    shading: o.fill ? { type: ShadingType.CLEAR, color: "auto", fill: o.fill } : undefined,
+    margins: { top: 80, bottom: 80, left: 120, right: 120 },
   });
 }
+const headCell = (t: string, width?: number, align?: Align) => cell(t, { fill: NAVY, color: "FFFFFF", bold: true, width, align });
+const labelCell = (t: string, width = 28) => cell(t, { fill: LABEL_FILL, bold: true, width });
+const ratingCell = (rating: string, o: { width?: number; align?: Align } = {}) =>
+  cell(rating, { fill: RATING_FILL[rating] ?? GREY, color: "FFFFFF", bold: true, ...o });
 
-function table(headers: string[], rows: (string | Paragraph[])[][], widths?: number[]) {
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders,
-    rows: [
-      new TableRow({ tableHeader: true, children: headers.map((h, i) => cell(h, { header: true, width: widths?.[i] })) }),
-      ...rows.map((r) => new TableRow({ cantSplit: true, children: r.map((c, i) => cell(c, { width: widths?.[i] })) })),
-    ],
-  });
-}
+const table = (rows: TableRow[]) => new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders, rows });
+const headerRow = (labels: string[], widths?: number[], align?: Align) =>
+  new TableRow({ tableHeader: true, children: labels.map((l, i) => headCell(l, widths?.[i], align)) });
+const row = (cells: TableCell[]) => new TableRow({ cantSplit: true, children: cells });
+const kv = (rows: [string, string | TableCell][], labelWidth = 28) =>
+  table(rows.map(([k, v]) => row([labelCell(k, labelWidth), typeof v === "string" ? cell(v, { width: 100 - labelWidth }) : v])));
 
-/** Two-column label/value table, used for each observation. */
-function keyValue(rows: [string, string, string?][]) {
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders,
-    rows: rows.map(([k, v, color]) => new TableRow({ cantSplit: true, children: [cell(k, { header: true, width: 28 }), cell(v, { width: 72, color })] })),
-  });
-}
+// ---- Formatting ---------------------------------------------------------------
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const toDate = (d: string) => new Date(d.length === 10 ? `${d}T00:00:00` : d);
+/** 01-Apr-2026, as in the template. */
+const dmy = (d: string | null | undefined) => {
+  if (!d) return "—";
+  const x = toDate(d);
+  return `${String(x.getDate()).padStart(2, "0")}-${MONTHS[x.getMonth()]}-${x.getFullYear()}`;
+};
+/** 01-Apr-26 for the summary table. */
+const dmyShort = (d: string | null | undefined) => (d ? dmy(d).replace(/-(\d{2})(\d{2})$/, "-$2") : "—");
+const cap = (s: string | null | undefined) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const resultText = (r: string | null | undefined) => (r === "pass" ? "Pass" : r === "fail" ? "Fail" : "Not tested");
+const ratingOf = (q: QueryRow) => cap(q.risk_rating ?? "low") as "High" | "Medium" | "Low";
+const statusOf = (q: QueryRow) =>
+  q.query_status === "closed" ? `Closed (retested on ${dmy(q.closed_at)})` : q.retests.length ? "In progress" : "Open";
 
-const resultText = (r: string | null) => (r === "pass" ? "Pass" : r === "fail" ? "Fail" : "Not tested");
-
+// ---- Report -------------------------------------------------------------------
 export async function downloadWordReport(r: ReportData) {
   const e = r.engagement;
+  const d = r.details;
   const s = r.summary;
-  const type = auditTypeLabel(e.audit_type);
-  const periodText = `${e.period === "FY" ? e.fy_label : `${e.fy_label} ${e.period}`} (${longDate(e.period_start)} to ${longDate(e.period_end)})`;
+  const reportTitle = `${auditTypeLabel(e.audit_type).replace(/ audit$/i, " Audit")} Report`; // "Internal Audit Report"
+  const area = d.audit_area;
 
-  const footer = new Footer({
-    children: [new Paragraph({
-      alignment: AlignmentType.RIGHT,
-      children: [
-        run(`${e.client.name} · ${type} · ${periodText.split(" (")[0]}    `, { color: MUTED, size: 16 }),
-        new TextRun({ children: ["Page ", PageNumber.CURRENT, " of ", PageNumber.TOTAL_PAGES], color: MUTED, size: 16 }),
-      ],
-    })],
-  });
-  const header = new Header({ children: [para([run(r.firm, { color: MUTED, size: 16 }), run("  ·  Confidential", { color: MUTED, size: 16 })], { align: AlignmentType.RIGHT })] });
+  // Observations: highest rating first, as the template asks.
+  const obs = [...r.queries].sort((a, b) => RANK[ratingOf(a)] - RANK[ratingOf(b)] || a.reference.localeCompare(b.reference));
+  const counts = { High: 0, Medium: 0, Low: 0 } as Record<"High" | "Medium" | "Low", number>;
+  obs.forEach((q) => counts[ratingOf(q)]++);
+  const overall = d.overall_rating || (counts.High ? "High" : counts.Medium ? "Medium" : "Low");
+  const agreed = obs.filter((q) => q.management_agreement === "agreed").length;
+  const cleanProcesses = r.processes.filter((x) => x.failed === 0).map((x) => x.name);
 
-  // ---- Cover + summary -------------------------------------------------------
-  const main: (Paragraph | Table)[] = [
-    new Paragraph({ spacing: { before: 2400, after: 120 }, children: [run(r.firm.toUpperCase(), { color: ACCENT, size: 20, bold: true })] }),
-    new Paragraph({ spacing: { after: 120 }, children: [run(`${type} report`, { size: 56, bold: true, color: INK })] }),
-    para(e.client.name, { size: 32, color: INK, after: 60 }),
-    para(periodText, { size: 22, color: MUTED, after: 600 }),
-    para([run("Report date: ", { color: MUTED, size: 20 }), run(longDate(r.generated_at), { size: 20 })], { after: 40 }),
-    para([run("Prepared by: ", { color: MUTED, size: 20 }), run(r.generated_by, { size: 20 })], { after: 40 }),
-    new Paragraph({ children: [new PageBreak()] }),
+  const assessment = d.overall_assessment || [
+    `Based on the testing performed, the control environment over ${area} at ${e.client.name} is rated ${overall} risk.`,
+    `Of the ${plural(s.controls, "key control")} tested across ${plural(s.processes, "process", "processes")}, ${s.passed} operated effectively and ${plural(s.failed, "exception")} ${s.failed === 1 ? "was" : "were"} noted (${counts.High} High, ${counts.Medium} Medium, ${counts.Low} Low).`,
+    obs.length
+      ? (agreed === obs.length ? "Management has agreed to the action plan for all observations." : `Management has agreed to the action plan for ${agreed} of ${plural(obs.length, "observation")}.`)
+      : "No exceptions were noted.",
+  ].join(" ");
 
-    heading("1. Executive summary"),
-    para(
-      `We tested the design and operating effectiveness of key controls across ${s.processes} process${s.processes === 1 ? "" : "es"} at ${e.client.name} for ${periodText}. ` +
-      `Of the ${s.controls} controls tested, ${s.passed} operated effectively and ${s.failed} exception${s.failed === 1 ? " was" : "s were"} noted. ` +
-      (s.failed ? `${s.queries_closed} of these ${s.queries_closed === 1 ? "has" : "have"} since been remediated and retested; ${s.queries_open} remain${s.queries_open === 1 ? "s" : ""} open.` : "No exceptions were noted."),
-    ),
-    table(["Measure", "Result"], [
-      ["Processes reviewed", String(s.processes)],
-      ["Controls tested", String(s.controls)],
-      ["Controls operating effectively", `${s.passed} (${s.controls ? Math.round((s.passed / s.controls) * 100) : 0}%)`],
-      ["Exceptions noted", String(s.failed)],
-      ["Exceptions closed after retest", String(s.queries_closed)],
-      ["Exceptions open", String(s.queries_open)],
-    ], [60, 40]),
-    para("", { after: 120 }),
-    para("Exceptions by risk rating", { bold: true, after: 80 }),
-    table(["High", "Medium", "Low"], [[String(s.failed_by_rating.high), String(s.failed_by_rating.medium), String(s.failed_by_rating.low)]]),
-
-    heading("2. Scope and results by process"),
-    table(
-      ["Process", "Tested by", "Controls", "Passed", "Failed", "Completed"],
-      r.processes.map((p) => [p.name, p.assignee ?? "—", String(p.controls), String(p.passed), String(p.failed), longDate(p.completed_at)]),
-      [30, 18, 12, 12, 12, 16],
-    ),
-
-    heading("3. Detailed observations"),
+  const highlights = d.key_highlights.length ? d.key_highlights : [
+    obs[0]
+      ? `Most significant issue (${ratingOf(obs[0])}): ${obs[0].control_title} — ${obs[0].failure_reason}`
+      : "No control exceptions were identified in the areas tested.",
+    obs.length
+      ? `${plural(s.queries_closed, "observation")} closed after retest; ${plural(s.queries_open, "observation")} open and due for retest on the agreed dates.`
+      : `All ${plural(s.controls, "control")} tested operated effectively during the period.`,
+    cleanProcesses.length
+      ? `Positive practice: no exceptions noted in ${cleanProcesses.join(", ")}.`
+      : `Testing covered ${plural(s.controls, "control")} across ${plural(s.processes, "process", "processes")}.`,
   ];
 
-  if (!r.queries.length) {
-    main.push(para("No exceptions were noted during testing."));
-  } else {
-    r.queries.forEach((q, i) => {
-      main.push(heading(`3.${i + 1}  ${q.reference} — ${q.control_title}`, HeadingLevel.HEADING_2));
-      const retests = q.retests.length
-        ? q.retests.map((t) => `${longDate(t.at)} · ${t.by} · ${t.result === "pass" ? "Passed" : "Failed"} — ${t.notes}`).join("\n")
-        : "Not yet retested";
-      main.push(keyValue([
-        ["Process", q.process_name ?? "—"],
-        ["Risk", `${q.risk_title} (${q.risk_rating ?? "—"} risk)`],
-        ["Control", `${q.control_code ?? ""} ${q.control_title ?? ""}`.trim()],
-        ["Samples", `${q.failed_samples} of ${q.sample_size} samples failed`],
-        ["Observation", q.failure_reason ?? "—"],
-        ["Management response", q.management_response ?? "—"],
-        ["Person responsible", q.responsible_person ?? "—"],
-        ["Timeline for closure", longDate(q.target_date)],
-        ["Status", q.query_status === "closed" ? `Closed on ${longDate(q.closed_at)}` : "Open", q.query_status === "open" ? RED : ACCENT],
-        ["Retest history", retests],
-      ]));
-      main.push(para("", { after: 120 }));
-    });
-  }
+  const conclusion = d.conclusion || [
+    obs.length === 0
+      ? `Based on the work performed, internal controls over ${area} are adequately designed and operating effectively.`
+      : overall === "High"
+        ? `Based on the work performed, internal controls over ${area} require significant improvement in the areas noted above.`
+        : `Based on the work performed, internal controls over ${area} are generally adequate, except for the observations noted above.`,
+    obs.length ? `Key areas needing attention: ${obs.slice(0, 3).map((q) => lowerFirst(q.control_title ?? "")).join("; ")}.` : "",
+    obs.length
+      ? `${agreed === obs.length ? "Management has agreed to the action plan, and the" : "The"} status of open observations will be reviewed in the next quarterly audit and reported to the Audit Committee.`
+      : "",
+  ].filter(Boolean).join(" ");
 
-  // ---- Annexure (landscape): every control tested ---------------------------
-  const annex: (Paragraph | Table)[] = [heading("Annexure — testing performed")];
-  r.processes.forEach((p) => {
-    annex.push(heading(`${p.name}${p.assignee ? ` — tested by ${p.assignee}` : ""}`, HeadingLevel.HEADING_2));
-    const rows: (string | Paragraph[])[][] = [];
-    p.risks.forEach((risk) => risk.controls.forEach((c) => {
+  const header = new Header({
+    children: [p([run(`${reportTitle} — ${area}  |  Confidential`, { color: GREY, size: 16 })], { align: AlignmentType.RIGHT, after: 0 })],
+  });
+  const footer = new Footer({
+    children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: ["Page ", PageNumber.CURRENT, " of ", PageNumber.TOTAL_PAGES], color: GREY, size: 16 })] })],
+  });
+
+  const body: (Paragraph | Table | TableOfContents)[] = [];
+
+  // ---- Cover --------------------------------------------------------------------
+  body.push(
+    new Paragraph({ spacing: { before: 2600, after: 80 }, children: [run(e.client.name.toUpperCase(), { bold: true, color: GREY, size: 28 })] }),
+    new Paragraph({ spacing: { after: 80 }, children: [run(reportTitle, { bold: true, color: NAVY, size: 52 })] }),
+    new Paragraph({ spacing: { after: 480 }, children: [run(area, { color: NAVY, size: 32 })] }),
+    kv([
+      ["Report Reference No.", d.reference_no],
+      ["Period of Coverage", `${dmy(e.period_start)} to ${dmy(e.period_end)}`],
+      ["Audit Fieldwork Dates", d.fieldwork_start ? `${dmy(d.fieldwork_start)} to ${dmy(d.fieldwork_end)}` : "—"],
+      ["Report Date", dmy(r.generated_at)],
+      ["Overall Risk Rating", overall],
+      ["Report Status", d.report_status],
+      ["Prepared By", `${d.prepared_by}, ${d.prepared_by_designation}`],
+      ["Reviewed By", `${d.reviewed_by}, ${d.reviewed_by_designation}`],
+    ], 33),
+    p([run("Distribution: ", { bold: true }), run(d.distribution)], { before: 240, after: 80 }),
+    p("Confidential — for internal use only.", { italics: true, color: GREY, size: 18 }),
+    pageBreak(),
+  );
+
+  // ---- Contents -------------------------------------------------------------------
+  body.push(
+    h1("Contents"),
+    new TableOfContents("Contents", { hyperlink: true, headingStyleRange: "1-2" }),
+    p("Right-click the table above and choose Update Field to refresh page numbers.", { italics: true, color: GREY, size: 18, before: 200 }),
+    pageBreak(),
+  );
+
+  // ---- 1. Scope and objectives --------------------------------------------------------
+  body.push(
+    h1("1. Audit Scope and Objectives"),
+    h2("1.1 Objectives"),
+    p("The objectives of this audit were to:", { after: 80 }),
+    ...d.objectives.map(bullet),
+    h2("1.2 Scope"),
+    table([
+      headerRow(["Item", "Details"], [33, 67]),
+      row([cell("Entity / Location(s)", { width: 33 }), cell(d.entity_locations || e.client.name, { width: 67 })]),
+      row([cell("Processes in scope"), cell(r.processes.map((x) => x.name).join(", "))]),
+      row([cell("Out of scope"), cell(d.out_of_scope)]),
+      row([cell("Approach"), cell(d.approach)]),
+      row([cell("Sampling basis"), cell(d.sampling_basis)]),
+    ]),
+    h2("1.3 Limitations"),
+    p(d.limitations),
+
+    h1("2. Period of Coverage"),
+    p([
+      run(`The audit covered transactions and activities for the period ${dmy(e.period_start)} to ${dmy(e.period_end)}. `),
+      run(d.fieldwork_start ? `Fieldwork was carried out from ${dmy(d.fieldwork_start)} to ${dmy(d.fieldwork_end)}. ` : ""),
+      run(d.exit_meeting_date ? `The exit meeting with management was held on ${dmy(d.exit_meeting_date)}.` : ""),
+    ]),
+
+    h1("3. Risk Rating Methodology"),
+    p("Each observation is rated on its potential impact and likelihood, as defined below."),
+    table([
+      headerRow(["Rating", "Definition", "Expected action"], [16, 58, 26]),
+      ...(["High", "Medium", "Low"] as const).map((k) => row([
+        ratingCell(k, { width: 16, align: AlignmentType.CENTER }),
+        cell(RATING_ACTION[k][0], { width: 58 }),
+        cell(RATING_ACTION[k][1], { width: 26 }),
+      ])),
+    ]),
+    p([
+      run("Overall report rating: ", { bold: true }),
+      run("High if any High-rated observation exists or several Medium observations together indicate a significant weakness; Medium if Medium observations exist without a High; otherwise Low."),
+    ], { before: 200 }),
+  );
+
+  // ---- 4. Executive summary ----------------------------------------------------------
+  body.push(
+    h1("4. Executive Summary"),
+    h2("4.1 Overall Assessment"),
+    p([run("Overall Risk Rating: ", { bold: true }), run(overall, { bold: true, color: RATING_FILL[overall] })], { after: 100 }),
+    p(assessment),
+    h2("4.2 Observations by Risk Rating"),
+    table([
+      headerRow(["High", "Medium", "Low", "Total"], [25, 25, 25, 25]),
+      row([counts.High, counts.Medium, counts.Low, obs.length].map((n) => cell(String(n), { align: AlignmentType.CENTER, width: 25 }))),
+    ]),
+    h2("4.3 Summary of Observations"),
+    obs.length
+      ? table([
+          headerRow(["#", "Observation", "Rating", "Responsible", "Target Date"], [6, 42, 14, 21, 17]),
+          ...obs.map((q, i) => row([
+            cell(String(i + 1), { width: 6 }),
+            cell(q.control_title ?? q.reference, { width: 42 }),
+            ratingCell(ratingOf(q), { width: 14, align: AlignmentType.CENTER }),
+            cell(q.responsible_person ?? "—", { width: 21 }),
+            cell(dmyShort(q.target_date), { width: 17 }),
+          ])),
+        ])
+      : p("No observations were raised.", { italics: true }),
+    h2("4.4 Key Highlights"),
+    ...highlights.map(bullet),
+  );
+
+  // ---- 5. Detailed observations ----------------------------------------------------------
+  body.push(pageBreak(), h1("5. Detailed Observations"));
+  if (!obs.length) body.push(p("No exceptions were noted during testing."));
+  obs.forEach((q, i) => {
+    const rating = ratingOf(q);
+    const sample = q.population != null ? `${q.sample_size} of ${q.population}` : `${q.sample_size}`;
+    const response = [q.management_agreement ? AGREEMENT[q.management_agreement] : null, q.management_response].filter(Boolean).join(" — ");
+    const retests = q.retests.length
+      ? "\n" + q.retests.map((t) => `Retest ${dmy(t.at)} by ${t.by}: ${t.result === "pass" ? "passed" : "failed"} — ${t.notes}`).join("\n")
+      : "";
+    body.push(
+      h2(`Observation ${i + 1}: ${q.control_title ?? q.reference}`),
+      table([
+        row([labelCell("Risk Rating"), ratingCell(rating, { width: 72 })]),
+        row([labelCell("Process / Area"), cell(`${q.process_name ?? "—"} → ${q.control_code ?? q.reference}`, { width: 72 })]),
+        row([labelCell("Background"), cell(
+          `${q.control_code ?? ""} — ${q.control_title ?? ""}.${q.control_description ? ` ${q.control_description}` : ""} ` +
+          `Sample tested: ${sample} items. Query reference ${q.reference}.`, { width: 72 })]),
+        row([labelCell("Issue / Finding"), cell(`${q.failure_reason ?? "—"}\nExceptions: ${q.failed_samples} of ${q.sample_size} samples tested.`, { width: 72 })]),
+        row([labelCell("Risk / Impact"), cell(q.risk_description || `Risk that ${lowerFirst(q.risk_title ?? "the control objective is not met")}.`, { width: 72 })]),
+        row([labelCell("Recommendation"), cell(q.recommendation || `Ensure the control "${q.control_title}" operates consistently as designed, and remediate the ${plural(q.failed_samples ?? 0, "exception")} identified.`, { width: 72 })]),
+        row([labelCell("Management Response"), cell(response || "—", { width: 72 })]),
+        row([labelCell("Responsible Person"), cell(q.responsible_person ?? "—", { width: 72 })]),
+        row([labelCell("Timeline (Target Date)"), cell(dmy(q.target_date), { width: 72 })]),
+        row([labelCell("Status"), cell(statusOf(q) + retests, { width: 72 })]),
+      ]),
+      spacer(),
+    );
+  });
+
+  // ---- 6. Conclusion + sign-off ------------------------------------------------------
+  body.push(
+    h1("6. Conclusion"),
+    p(conclusion),
+    p(`We thank the management and staff of ${d.department} for their cooperation during the audit.`, { after: 240 }),
+    table([
+      row([cell("Prepared by", { fill: LABEL_FILL, bold: true, width: 50 }), cell("Reviewed & approved by", { fill: LABEL_FILL, bold: true, width: 50 })]),
+      row([cell(d.prepared_by), cell(d.reviewed_by)]),
+      row([cell(d.prepared_by_designation), cell(d.reviewed_by_designation)]),
+      row([cell("Signature: ______________"), cell("Signature: ______________")]),
+      row([cell("Date:"), cell("Date:")]),
+    ]),
+
+    h1("Annexure A: Abbreviations"),
+    table([
+      headerRow(["Abbreviation", "Meaning"], [25, 75]),
+      ...d.abbreviations.map((a) => row([cell(a.abbr, { width: 25 }), cell(a.meaning, { width: 75 })])),
+    ]),
+  );
+
+  // ---- Annexure B (landscape): every control and check tested -------------------------
+  const annex: (Paragraph | Table)[] = [h1("Annexure B: Testing Performed")];
+  r.processes.forEach((proc) => {
+    annex.push(h2(`${proc.name}${proc.assignee ? ` — tested by ${proc.assignee}` : ""}`));
+    const rows: TableRow[] = [headerRow(["Risk", "Control", "Checks performed", "Population", "Sample", "Result", "Notes"], [16, 20, 28, 8, 7, 7, 14])];
+    proc.risks.forEach((risk) => risk.controls.forEach((c) => {
       const checks = c.snapshot.checks.flatMap((k) => {
         const cr = c.check_results[k.id];
         const mark = cr?.result === "pass" ? "✓" : cr?.result === "fail" ? "✗" : "–";
         const figures = cr?.result ? ` (${cr.sample_size ?? "—"} of ${cr.population ?? "—"} · ${resultText(cr.result)})` : cr?.notes ? " (Not tested)" : "";
-        const lines = [new Paragraph({
-          spacing: { after: cr?.notes ? 0 : 30 },
-          children: [run(`${mark} ${k.description}${figures}`, { size: 16, color: cr?.result === "fail" ? RED : cr?.result ? INK : MUTED })],
+        const out = [new Paragraph({
+          spacing: { after: cr?.notes ? 0 : 40 },
+          children: [run(`${mark} ${k.description}${figures}`, { size: 16, color: cr?.result === "fail" ? RATING_FILL.High : cr?.result ? INK : GREY })],
         })];
-        if (cr?.notes) lines.push(new Paragraph({ spacing: { after: 30 }, children: [run(`   ${cr.notes}`, { size: 15, color: MUTED, italics: true })] }));
-        return lines;
+        if (cr?.notes) out.push(new Paragraph({ spacing: { after: 40 }, children: [run(`   ${cr.notes}`, { size: 15, color: GREY, italics: true })] }));
+        return out;
       });
-      rows.push([
-        `${risk.code ?? ""} ${risk.title}\n(${risk.rating} risk)`,
-        `${c.snapshot.control_code ?? ""} ${c.snapshot.control_title}`,
-        checks.length ? checks : "—",
-        c.population === null ? "—" : String(c.population),
-        c.sample_size === null ? "—" : String(c.sample_size),
-        resultText(c.result) + (c.result === "fail" ? `\n${c.reference}` : ""),
-        c.result === "fail" ? (c.failure_reason ?? "") : (c.test_notes ?? ""),
-      ]);
+      rows.push(row([
+        cell(`${risk.code ?? ""} ${risk.title}\n(${cap(risk.rating)} risk)`, { size: 16 }),
+        cell(`${c.snapshot.control_code ?? ""} ${c.snapshot.control_title}`, { size: 16 }),
+        checks.length ? cell(checks) : cell("—", { size: 16 }),
+        cell(c.population == null ? "—" : String(c.population), { size: 16 }),
+        cell(c.sample_size == null ? "—" : String(c.sample_size), { size: 16 }),
+        c.result === "fail"
+          ? cell(`Fail\n${c.reference}`, { size: 16, bold: true, color: RATING_FILL.High })
+          : cell(resultText(c.result), { size: 16 }),
+        cell(c.result === "fail" ? (c.failure_reason ?? "") : (c.test_notes ?? ""), { size: 16 }),
+      ]));
     }));
-    annex.push(table(["Risk", "Control", "Checks performed", "Population", "Sample", "Result", "Notes"], rows, [16, 20, 28, 8, 7, 7, 14]));
+    annex.push(table(rows));
   });
 
   const doc = new Document({
     creator: r.firm,
-    title: `${type} report — ${e.client.name}`,
+    title: `${reportTitle} — ${e.client.name}`,
+    features: { updateFields: true }, // Word fills the Contents page numbers when the file is opened
     styles: {
-      default: { document: { run: { font: "Calibri", size: 20, color: INK } } },
+      default: { document: { run: { font: "Calibri", size: 22, color: INK } } },
       paragraphStyles: [
-        { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", run: { size: 30, bold: true, color: INK } },
-        { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", run: { size: 22, bold: true, color: ACCENT } },
+        { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { font: "Calibri", size: 32, bold: true, color: NAVY } },
+        { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true, run: { font: "Calibri", size: 24, bold: true, color: NAVY } },
       ],
     },
     sections: [
-      { headers: { default: header }, footers: { default: footer }, children: main },
-      {
-        properties: { page: { size: { orientation: PageOrientation.LANDSCAPE } } },
-        headers: { default: header },
-        footers: { default: footer },
-        children: annex,
-      },
+      { headers: { default: header }, footers: { default: footer }, children: body },
+      { properties: { page: { size: { orientation: PageOrientation.LANDSCAPE } } }, headers: { default: header }, footers: { default: footer }, children: annex },
     ],
   });
 

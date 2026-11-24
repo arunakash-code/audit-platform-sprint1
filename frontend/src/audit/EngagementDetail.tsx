@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronLeft, FileText, Lock, Pencil, Plus, Presentation, Trash2 } from "lucide-react";
+import { CheckCircle2, ChevronLeft, FileText, Lock, Pencil, Plus, Presentation, Settings2, Trash2 } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { Alert, Button, Card, EmptyState, Field, Input, LoadingBlock, Modal, Select, cx } from "../components/ui";
 import type { Engagement, EngagementProcess, Meta } from "./types";
 import { EngagementModal } from "./Engagements";
 import { ProgressLegend, Stat, StatusBadge, TestProgress, fmtDate, useMeta } from "./shared";
-import type { ReportData } from "./reports/types";
+import type { ReportData, ReportDetails } from "./reports/types";
+import { ReportDetailsModal } from "./ReportDetailsModal";
 
 type Detail = {
   engagement: Engagement;
@@ -15,6 +16,7 @@ type Detail = {
   summary: { processes: number; processes_completed: number; controls: number; tested: number; passed: number; failed: number; open_queries: number };
   can_manage: boolean;
   report_ready: boolean;
+  report_details: ReportDetails;
 };
 
 export default function EngagementDetail() {
@@ -164,7 +166,7 @@ export default function EngagementDetail() {
       </Card>
 
       {/* Step IV */}
-      {can_manage && <Reports engagement={e} ready={data.report_ready} remaining={processes.length - s.processes_completed} untested={s.controls - s.tested} />}
+      {can_manage && <Reports engagement={e} details={data.report_details} ready={data.report_ready} remaining={processes.length - s.processes_completed} untested={s.controls - s.tested} />}
 
       {meta && can_manage && (
         <>
@@ -184,8 +186,9 @@ function DueInput({ value, label, onCommit }: { value: string | null; label: str
   );
 }
 
-function Reports({ engagement, ready, remaining, untested }: { engagement: Engagement; ready: boolean; remaining: number; untested: number }) {
+function Reports({ engagement, details, ready, remaining, untested }: { engagement: Engagement; details: ReportDetails; ready: boolean; remaining: number; untested: number }) {
   const [busy, setBusy] = useState<"word" | "ppt" | null>(null);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState("");
 
   async function generate(format: "word" | "ppt") {
@@ -212,12 +215,14 @@ function Reports({ engagement, ready, remaining, untested }: { engagement: Engag
               : `Available once every process is tested — ${remaining} process${remaining === 1 ? "" : "es"} and ${untested} control${untested === 1 ? "" : "s"} still to go.`}
           </p>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button variant="ghost" onClick={() => setEditing(true)}><Settings2 className="size-4" /> Report details</Button>
           <Button variant="secondary" disabled={!ready} loading={busy === "word"} onClick={() => generate("word")}><FileText className="size-4" /> Word (detailed)</Button>
           <Button variant="secondary" disabled={!ready} loading={busy === "ppt"} onClick={() => generate("ppt")}><Presentation className="size-4" /> PowerPoint (summary)</Button>
         </div>
       </div>
       {error && <div className="mt-3"><Alert>{error}</Alert></div>}
+      <ReportDetailsModal open={editing} onClose={() => setEditing(false)} engagementId={engagement.id} details={details} />
     </Card>
   );
 }

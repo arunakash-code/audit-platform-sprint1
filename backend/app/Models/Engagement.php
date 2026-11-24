@@ -19,7 +19,7 @@ class Engagement extends Model
 
     protected $fillable = [
         'tenant_id', 'client_id', 'audit_type', 'frequency', 'fiscal_year', 'period',
-        'period_start', 'period_end', 'status', 'notes', 'created_by', 'completed_at',
+        'period_start', 'period_end', 'status', 'notes', 'report_details', 'created_by', 'completed_at',
     ];
 
     protected $appends = ['label', 'fy_label'];
@@ -31,6 +31,7 @@ class Engagement extends Model
             'period_start' => 'date:Y-m-d',
             'period_end' => 'date:Y-m-d',
             'completed_at' => 'datetime',
+            'report_details' => 'array',
         ];
     }
 

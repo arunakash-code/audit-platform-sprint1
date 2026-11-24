@@ -1,7 +1,34 @@
 import type { ControlTest, Engagement, QueryRow } from "../types";
 
+export type ReportDetails = {
+  reference_no: string;
+  audit_area: string;
+  report_status: "Draft" | "Final";
+  overall_rating: "" | "High" | "Medium" | "Low";
+  fieldwork_start: string | null;
+  fieldwork_end: string | null;
+  exit_meeting_date: string | null;
+  prepared_by: string;
+  prepared_by_designation: string;
+  reviewed_by: string;
+  reviewed_by_designation: string;
+  distribution: string;
+  objectives: string[];
+  entity_locations: string;
+  out_of_scope: string;
+  approach: string;
+  sampling_basis: string;
+  limitations: string;
+  overall_assessment: string | null;
+  key_highlights: string[];
+  conclusion: string | null;
+  department: string;
+  abbreviations: { abbr: string; meaning: string }[];
+};
+
 export type ReportData = {
   firm: string;
+  details: ReportDetails;
   generated_at: string;
   generated_by: string;
   engagement: Engagement & { client: NonNullable<Engagement["client"]> };

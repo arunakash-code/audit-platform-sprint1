@@ -102,6 +102,8 @@ export type ControlTest = {
   failure_reason: string | null;
   failed_samples: number | null;
   management_response: string | null;
+  recommendation: string | null;
+  management_agreement: "agreed" | "partially_agreed" | "not_agreed" | null;
   target_date: string | null;
   responsible_person: string | null;
   query_status: "open" | "closed" | null;
@@ -136,6 +138,11 @@ export type QueryRow = {
   failed_samples: number | null;
   failure_reason: string | null;
   management_response: string | null;
+  recommendation: string | null;
+  management_agreement: "agreed" | "partially_agreed" | "not_agreed" | null;
+  population: number | null;
+  control_description: string | null;
+  risk_description: string | null;
   responsible_person: string | null;
   target_date: string | null;
   days_to_target: number | null;

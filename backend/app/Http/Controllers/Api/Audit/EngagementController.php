@@ -82,6 +82,7 @@ class EngagementController extends Controller
             ],
             'can_manage' => AuditWorkflow::can($request, 'audit.manage'),
             'report_ready' => $engagement->status === 'completed',
+            'report_details' => self::reportDetails($engagement, $request),
         ]]);
     }
 
@@ -208,6 +209,7 @@ class EngagementController extends Controller
 
         return response()->json(['data' => [
             'firm' => $request->attributes->get('tenant')->name,
+            'details' => self::reportDetails($engagement, $request),
             'generated_at' => now()->toIso8601String(),
             'generated_by' => $request->user()->name,
             'engagement' => $engagement->makeHidden('processes'),
@@ -223,6 +225,113 @@ class EngagementController extends Controller
             'processes' => $processes,
             'queries' => $failedTests->map(fn ($t) => AuditWorkflow::presentQuery($t->setRelation('engagement', $engagement)))->values(),
         ]]);
+    }
+
+    /** Step IV — edit the report details used on the Word report (cover page, scope, sign-off…). */
+    public function updateReportDetails(Request $request, Engagement $engagement): JsonResponse
+    {
+        $data = $request->validate([
+            'reference_no' => ['nullable', 'string', 'max:60'],
+            'audit_area' => ['nullable', 'string', 'max:300'],
+            'report_status' => ['nullable', Rule::in(['Draft', 'Final'])],
+            'overall_rating' => ['nullable', Rule::in(['', 'High', 'Medium', 'Low'])],
+            'fieldwork_start' => ['nullable', 'date'],
+            'fieldwork_end' => ['nullable', 'date', 'after_or_equal:fieldwork_start'],
+            'exit_meeting_date' => ['nullable', 'date'],
+            'prepared_by' => ['nullable', 'string', 'max:150'],
+            'prepared_by_designation' => ['nullable', 'string', 'max:150'],
+            'reviewed_by' => ['nullable', 'string', 'max:150'],
+            'reviewed_by_designation' => ['nullable', 'string', 'max:150'],
+            'distribution' => ['nullable', 'string', 'max:500'],
+            'objectives' => ['nullable', 'array', 'max:10'],
+            'objectives.*' => ['nullable', 'string', 'max:500'],
+            'entity_locations' => ['nullable', 'string', 'max:500'],
+            'out_of_scope' => ['nullable', 'string', 'max:1000'],
+            'approach' => ['nullable', 'string', 'max:1000'],
+            'sampling_basis' => ['nullable', 'string', 'max:1000'],
+            'limitations' => ['nullable', 'string', 'max:2000'],
+            'overall_assessment' => ['nullable', 'string', 'max:3000'],
+            'key_highlights' => ['nullable', 'array', 'max:10'],
+            'key_highlights.*' => ['nullable', 'string', 'max:500'],
+            'conclusion' => ['nullable', 'string', 'max:3000'],
+            'department' => ['nullable', 'string', 'max:200'],
+            'abbreviations' => ['nullable', 'array', 'max:40'],
+            'abbreviations.*.abbr' => ['required', 'string', 'max:20'],
+            'abbreviations.*.meaning' => ['required', 'string', 'max:200'],
+        ]);
+
+        // Drop blanks so cleared fields fall back to the defaults.
+        $clean = [];
+        foreach ($data as $key => $value) {
+            if (is_array($value)) {
+                $value = array_values(array_filter($value, fn ($x) => is_array($x) || trim((string) $x) !== ''));
+            } elseif (is_string($value)) {
+                $value = trim($value);
+            }
+            if ($value !== null && $value !== '' && $value !== []) {
+                $clean[$key] = $value;
+            }
+        }
+
+        $before = $engagement->report_details ?? [];
+        $engagement->update(['report_details' => $clean]);
+        [$b, $a] = AuditLogger::diff($before, $clean);
+        AuditLogger::record('engagement.report_details_updated', $engagement, $b, $a);
+
+        return response()->json(['data' => self::reportDetails($engagement, $request)]);
+    }
+
+    /**
+     * Saved report details merged over sensible defaults, so the report never shows template placeholders.
+     * Narrative fields left blank (overall assessment, highlights, conclusion) are written by the report itself.
+     */
+    public static function reportDetails(Engagement $engagement, Request $request): array
+    {
+        $engagement->loadMissing(['client', 'processes.assignee:id,name']);
+        $areas = $engagement->processes->pluck('process_name')->join(', ', ' and ');
+        $preparers = $engagement->processes->map(fn ($p) => $p->assignee?->name)->filter()->unique()->join(', ');
+        $prefix = $engagement->audit_type === 'statutory' ? 'SA' : 'IA';
+        $first = $engagement->tests()->whereNotNull('tested_at')->min('tested_at');
+        $last = $engagement->tests()->whereNotNull('tested_at')->max('tested_at');
+        $client = $engagement->client;
+
+        $defaults = [
+            'reference_no' => sprintf('%s/%s/%02d', $prefix, str_replace(' ', '', $engagement->fy_label), $engagement->id),
+            'audit_area' => $areas ?: 'Processes in scope',
+            'report_status' => $engagement->status === 'completed' ? 'Final' : 'Draft',
+            'overall_rating' => '',
+            'fieldwork_start' => $first ? substr((string) $first, 0, 10) : null,
+            'fieldwork_end' => $last ? substr((string) $last, 0, 10) : null,
+            'exit_meeting_date' => null,
+            'prepared_by' => $preparers ?: $request->user()->name,
+            'prepared_by_designation' => 'Auditor',
+            'reviewed_by' => $request->user()->name,
+            'reviewed_by_designation' => 'Audit Manager',
+            'distribution' => 'Audit Committee; MD / CEO; CFO; Head of Department audited',
+            'objectives' => [
+                'Assess the design and operating effectiveness of key controls over '.($areas ?: 'the processes in scope'),
+                'Evaluate compliance with company policies, SOPs and applicable laws and regulations',
+                'Identify process gaps, inefficiencies and opportunities for improvement',
+            ],
+            'entity_locations' => trim(($client?->name ?? '').($client?->address ? ' — '.$client->address : '')),
+            'out_of_scope' => 'Processes and locations not listed above',
+            'approach' => 'Walkthroughs, sample testing of key controls, review of supporting documents and discussions with process owners',
+            'sampling_basis' => 'Judgmental; sample sizes based on control frequency and population (see Annexure B)',
+            'limitations' => 'None',
+            'overall_assessment' => null,
+            'key_highlights' => [],
+            'conclusion' => null,
+            'department' => $client?->name ?? 'the departments audited',
+            'abbreviations' => [
+                ['abbr' => 'IA', 'meaning' => 'Internal Audit'],
+                ['abbr' => 'SOP', 'meaning' => 'Standard Operating Procedure'],
+                ['abbr' => 'DOA', 'meaning' => 'Delegation of Authority'],
+                ['abbr' => 'ERP', 'meaning' => 'Enterprise Resource Planning'],
+                ['abbr' => 'RCM', 'meaning' => 'Risk and Control Matrix'],
+            ],
+        ];
+
+        return array_merge($defaults, $engagement->report_details ?? []);
     }
 
     private function validated(Request $request, ?Engagement $engagement = null): array

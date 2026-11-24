@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronLeft, CircleDashed, CircleMinus, Copy, Eye, ListChecks, XCircle } from "lucide-react";
 import { api, apiError, type ValidationErrors } from "../lib/api";
-import { Alert, Badge, Button, Card, Drawer, Field, Input, LoadingBlock, Textarea, cx } from "../components/ui";
+import { Alert, Badge, Button, Card, Drawer, Field, Input, LoadingBlock, Select, Textarea, cx } from "../components/ui";
 import type { CheckResult, ControlTest, EngagementProcess, RiskGroup } from "./types";
 import { RatingBadge, StatusBadge, TestProgress, fmtDate, humanize } from "./shared";
 import { ResultToggle, RetestForm, RetestHistory } from "./QueryParts";
@@ -149,6 +149,7 @@ function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: Contr
     population: asStr(t.population), sample_size: asStr(t.sample_size), result: t.result ?? "", test_notes: t.test_notes ?? "",
     failure_reason: t.failure_reason ?? "", failed_samples: asStr(t.failed_samples), management_response: t.management_response ?? "",
     target_date: t.target_date ?? "", responsible_person: t.responsible_person ?? "",
+    recommendation: t.recommendation ?? "", management_agreement: t.management_agreement ?? "",
   });
   const [checks, setChecks] = useState<Record<string, CheckForm>>(
     () => Object.fromEntries(s.checks.map((c) => [String(c.id), toCheckForm(t.check_results[c.id])])),
@@ -198,6 +199,7 @@ function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: Contr
       ...(result === "fail" ? {
         failure_reason: form.failure_reason, failed_samples: num(form.failed_samples), management_response: form.management_response,
         target_date: form.target_date || null, responsible_person: form.responsible_person,
+        recommendation: form.recommendation.trim() || null, management_agreement: form.management_agreement || null,
       } : {}),
     }),
     onSuccess: async (_r, next) => {
@@ -329,7 +331,20 @@ function ControlDrawer({ test: t, canTest, onClose, onSavedNext }: { test: Contr
               hint={perCheck && failedCap > 0 ? `Up to ${failedCap} (samples tested on failed checks)` : undefined}>
               <Input type="number" min={1} value={form.failed_samples} onChange={(e) => set({ failed_samples: e.target.value })} />
             </Field>
-            <Field label="Management response" error={errors.management_response?.[0]}><Textarea rows={3} value={form.management_response} onChange={(e) => set({ management_response: e.target.value })} /></Field>
+            <Field label="Recommendation (optional)" error={errors.recommendation?.[0]} hint="Corrective action you recommend. Shown in the report; a standard recommendation is used if left blank.">
+              <Textarea rows={2} value={form.recommendation} onChange={(e) => set({ recommendation: e.target.value })} />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-[200px_1fr]">
+              <Field label="Management agrees?" error={errors.management_agreement?.[0]}>
+                <Select value={form.management_agreement} onChange={(e) => set({ management_agreement: e.target.value })}>
+                  <option value="">Not stated</option>
+                  <option value="agreed">Agreed</option>
+                  <option value="partially_agreed">Partially agreed</option>
+                  <option value="not_agreed">Not agreed</option>
+                </Select>
+              </Field>
+              <Field label="Management response" error={errors.management_response?.[0]}><Textarea rows={3} value={form.management_response} onChange={(e) => set({ management_response: e.target.value })} /></Field>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Timeline for closure" error={errors.target_date?.[0]} hint="The query appears in 'Due for retest' from this date."><Input type="date" value={form.target_date} onChange={(e) => set({ target_date: e.target.value })} /></Field>
               <Field label="Person responsible" error={errors.responsible_person?.[0]}><Input value={form.responsible_person} onChange={(e) => set({ responsible_person: e.target.value })} /></Field>

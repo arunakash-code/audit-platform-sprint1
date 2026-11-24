@@ -89,6 +89,8 @@ class TestingController extends Controller
             'failure_reason' => ['nullable', 'string', 'max:5000'],
             'failed_samples' => ['nullable', 'integer', 'min:1'],
             'management_response' => ['nullable', 'string', 'max:5000'],
+            'recommendation' => ['nullable', 'string', 'max:5000'],
+            'management_agreement' => ['nullable', Rule::in(ControlTest::AGREEMENTS)],
             'target_date' => ['nullable', 'date'],
             'responsible_person' => ['nullable', 'string', 'max:150'],
         ];
@@ -177,6 +179,9 @@ class TestingController extends Controller
                 }
                 $data[$f] = $input[$f] ?? null;
             }
+            // Optional extras used by the report template.
+            $data['recommendation'] = ($input['recommendation'] ?? '') !== '' ? $input['recommendation'] : null;
+            $data['management_agreement'] = $input['management_agreement'] ?? null;
             if (($input['failed_samples'] ?? null) !== null && $input['failed_samples'] > $failedSampleCap) {
                 $errors['failed_samples'] = $perCheck
                     ? "Failed samples cannot exceed the samples tested on the failed checks ($failedSampleCap)."
@@ -184,14 +189,14 @@ class TestingController extends Controller
             }
         } else {
             // Passing (or not yet complete) controls carry no query.
-            $data = array_merge($data, array_fill_keys(['failure_reason', 'failed_samples', 'management_response', 'target_date', 'responsible_person'], null));
+            $data = array_merge($data, array_fill_keys(['failure_reason', 'failed_samples', 'management_response', 'recommendation', 'management_agreement', 'target_date', 'responsible_person'], null));
         }
 
         if ($errors) {
             throw ValidationException::withMessages($errors);
         }
 
-        $before = $controlTest->only(['population', 'sample_size', 'result', 'failure_reason', 'failed_samples', 'management_response', 'target_date', 'responsible_person']);
+        $before = $controlTest->only(['population', 'sample_size', 'result', 'failure_reason', 'failed_samples', 'management_response', 'recommendation', 'management_agreement', 'target_date', 'responsible_person']);
         $before['target_date'] = $controlTest->target_date?->format('Y-m-d');
 
         $controlTest->fill($data);
